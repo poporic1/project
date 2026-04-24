@@ -1,0 +1,20 @@
+version: "3.9"
+
+services:
+  postgre:
+    image: postgres:13.3
+    container_name: postgres_source
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: source                       # имя БД
+      POSTGRES_USER: user                       # имя пользователя
+      POSTGRES_PASSWORD: qwerty                 # пароль
+    ports:
+      - "5439:5432"
+    volumes:
+      - ./sql_scripts:/docker-entrypoint-initdb.d   # папка со скриптами инициализации
+      - ./csv:/csv                                  # папка с CSV-файлами
+      - pgdata:/var/lib/postgresql/data             # том для сохранения данных
+
+volumes:
+  pgdata:

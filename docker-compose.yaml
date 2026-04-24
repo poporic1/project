@@ -1,0 +1,86 @@
+version: '3.8'
+
+x-airflow-common: &airflow-common
+  image: apache/airflow:2.9.3
+  env_file:
+    - .env
+  environment:
+    AIRFLOW__CORE__EXECUTOR: LocalExecutor
+    AIRFLOW__CORE__LOAD_EXAMPLES: "False"
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@airflow-postgres:5432/airflow
+    AIRFLOW__CORE__FERNET_KEY: ""
+    AIRFLOW__WEBSERVER__SECRET_KEY: "airflow_secret_key"
+    AIRFLOW_CONN_SOURCE_DB: postgresql://user:qwerty@host.docker.internal:5439/source
+    AIRFLOW_CONN_DWH_DB: postgresql://dwh_user:dwh_pass@postgres-dwh:5432/dwh
+    PYTHONPATH: /opt/airflow/dags
+  volumes:
+    - ./airflow/dags:/opt/airflow/dags
+    - ./airflow/requirements.txt:/requirements.txt
+  depends_on:
+    - airflow-postgres
+
+services:
+  postgres-dwh:
+    image: postgres:13.3
+    container_name: postgres_dwh
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: dwh
+      POSTGRES_USER: dwh_user
+      POSTGRES_PASSWORD: dwh_pass
+    ports:
+      - "5440:5432"
+    volumes:
+      - ./airflow/dags/ddl/stage:/docker-entrypoint-initdb.d
+      - dwh_pgdata:/var/lib/postgresql/data
+
+  airflow-postgres:
+    image: postgres:13.3
+    container_name: airflow_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: airflow
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+    ports:
+      - "5441:5432"
+    volumes:
+      - airflow_pgdata:/var/lib/postgresql/data
+
+  airflow-init:
+    <<: *airflow-common
+    container_name: airflow_init
+    command: >
+      bash -c "pip install --no-cache-dir -r /requirements.txt &&
+      airflow db migrate &&
+      airflow users create
+      --username admin
+      --password admin
+      --firstname admin
+      --lastname admin
+      --role Admin
+      --email admin@example.com"
+
+  airflow-webserver:
+    <<: *airflow-common
+    container_name: airflow_webserver
+    restart: unless-stopped
+    command: >
+      bash -c "pip install --no-cache-dir -r /requirements.txt && airflow webserver"
+    ports:
+      - "8080:8080"
+    depends_on:
+      - airflow-init
+
+  airflow-scheduler:
+    <<: *airflow-common
+    container_name: airflow_scheduler
+    restart: unless-stopped
+    command: >
+      bash -c "pip install --no-cache-dir -r /requirements.txt && airflow scheduler"
+    depends_on:
+      - airflow-init
+
+volumes:
+  dwh_pgdata:
+  airflow_pgdata:

@@ -1,4 +1,4 @@
-from datetime import datetime
+import pendulum
 
 from airflow import DAG
 from airflow.operators.empty import EmptyOperator
@@ -10,8 +10,8 @@ from common.stage_loader import load_incremental_new_data_to_stage_table
 # DAG инкрементальной загрузки Source в Stage
 with DAG(
     dag_id="source_to_stage_incremental_load",
-    start_date=datetime(2025, 1, 1),
-    schedule="@daily",
+    start_date=pendulum.datetime(2026, 2, 1, tz="Europe/Moscow"),
+    schedule="0 7 * * *",
     catchup=False,
     max_active_runs=1,
 ) as dag:

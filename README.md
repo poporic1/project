@@ -10,6 +10,7 @@
 
 - `stage` - слой с исходными данными
 - `dds` - слой с очищенными и подготовленными данными
+- `dm` - слой витрин
 
 Доступны DAG-и:
 
@@ -17,6 +18,7 @@
 - `source_to_stage_incremental_load` - инкрементальная дозагрузка Source -> Stage
 - `dds_load_currency` - загрузка курсов валют из API ЦБ РФ в `dds.dim_currency`
 - `stage_to_dds_load` - загрузка данных из `stage` в DDS
+- `dds_to_dm_load` - загрузка витрин из DDS в DM
 
 ## Структура проекта
 
@@ -26,52 +28,67 @@ project/
 ├─ docker-compose.yaml
 ├─ README.md
 ├─ airflow/
+│  ├─ create_dwh_objects.sql
 │  ├─ requirements.txt
 │  └─ dags/
-│     ├─ create_all_db_objects.sql
 │     ├─ stage_full_reload_dag.py
 │     ├─ stage_incremental_load_dag.py
 │     ├─ dds_load_currency_dag.py
 │     ├─ stage_to_dds_load_dag.py
-│     ├─ common/
+│     ├─ dds_to_dm_load_dag.py
+│     ├─ etl/
+│     │  ├─ dwh.py
 │     │  ├─ stage_loader.py
-│     │  ├─ currency_loader.py
-│     │  └─ dds_loader.py
+│     │  └─ currency_loader.py
 │     ├─ ddl/
+│     │  ├─ create_ddl_objects.sql
 │     │  ├─ stage/
-│     │  │  ├─ create_stage_objects.sql
-│     │  │  └─ create_stage_tables.sql
-│     │  └─ dds/
-│     │     ├─ create_dds_objects.sql
-│     │     ├─ schema_dds.sql
-│     │     ├─ dim_position.sql
-│     │     ├─ dim_employee.sql
-│     │     ├─ dim_location.sql
-│     │     ├─ dim_place.sql
+│     │  │  ├─ schema_stage.sql
+│     │  │  ├─ source_table.sql
+│     │  │  └─ tmp_source_table.sql
+│     │  ├─ dds/
+│     │  │  ├─ schema_dds.sql
+│     │  │  ├─ dim_position.sql
+│     │  │  ├─ dim_employee.sql
+│     │  │  ├─ dim_location.sql
+│     │  │  ├─ dim_place.sql
+│     │  │  ├─ dim_status.sql
+│     │  │  ├─ dim_critical.sql
+│     │  │  ├─ dim_currency.sql
+│     │  │  ├─ fact_request.sql
+│     │  │  └─ reject_fact_request.sql
+│     │  └─ dm/
+│     │     ├─ schema_dm.sql
+│     │     ├─ dim_month.sql
+│     │     ├─ dim_place_location.sql
+│     │     ├─ dim_responsible.sql
 │     │     ├─ dim_status.sql
-│     │     ├─ dim_critical.sql
-│     │     ├─ dim_currency.sql
-│     │     ├─ fact_request.sql
-│     │     ├─ reject_fact_request.sql
-│     │     └─ tmp_fact_request_rows.sql
+│     │     ├─ fact_first_priority.sql
+│     │     ├─ fact_metrics.sql
+│     │     ├─ tmp_fact_first_priority.sql
+│     │     └─ tmp_fact_metrics.sql
 │     └─ dml/
-│        ├─ stage/
-│        │  ├─ create_tmp_table.sql
-│        │  ├─ load_all_source_data_to_tmp_table.sql
-│        │  ├─ swap_tmp_table_with_stage_table.sql
-│        │  └─ load_incremental_new_data_to_stage_table.sql
-│        └─ dds/
-│           ├─ create_dds_objects.sql
-│           ├─ clean_string.sql
-│           ├─ to_date_safe.sql
-│           ├─ to_timestamp_safe.sql
-│           ├─ load_dim_position.sql
-│           ├─ load_dim_employee.sql
-│           ├─ load_dim_location.sql
-│           ├─ load_dim_place.sql
+│        ├─ create_dml_objects.sql
+│        ├─ public/
+│        │  └─ replace_table_with_tmp.sql
+│        ├─ dds/
+│        │  ├─ clean_string.sql
+│        │  ├─ to_date_safe.sql
+│        │  ├─ to_timestamp_safe.sql
+│        │  ├─ load_dim_position.sql
+│        │  ├─ load_dim_employee.sql
+│        │  ├─ load_dim_location.sql
+│        │  ├─ load_dim_place.sql
+│        │  ├─ load_dim_status.sql
+│        │  ├─ load_dim_critical.sql
+│        │  └─ load_fact_request.sql
+│        └─ dm/
+│           ├─ load_dim_month.sql
+│           ├─ load_dim_place_location.sql
+│           ├─ load_dim_responsible.sql
 │           ├─ load_dim_status.sql
-│           ├─ load_dim_critical.sql
-│           └─ load_fact_request.sql
+│           ├─ load_fact_first_priority.sql
+│           └─ load_fact_metrics.sql
 └─ source/
 ```
 
@@ -98,7 +115,7 @@ DAG - `source_to_stage_full_reload`
 Данные из Source полностью перегружаются в Stage. Используется для первого запуска.
 
 Логика работы такая:
-1. Создается `stage.tmp_source_table`
+1. Очищается `stage.tmp_source_table`
 2. В `tmp` загружаются все данные из Source
 3. `tmp` подменяет `stage.source_table` через `rename`
 
@@ -140,11 +157,15 @@ DAG - `stage_to_dds_load`
 
 - `dds.fact_request`
 
-Служебные таблицы:
+Служебная таблица:
 
 - `dds.reject_fact_request` - строки, которые не прошли проверку качества данных
-- `dds.tmp_fact_request_rows` - рабочая таблица для подготовки новых и измененных версий факта
 
+Справочники `dds.dim_position`, `dds.dim_employee`, `dds.dim_location`, `dds.dim_place`, `dds.dim_status`, `dds.dim_critical` загружаются как insert-only: новые значения добавляются, существующие не обновляются.
+
+`dds.dim_currency` загружается отдельным DAG-ом через upsert: новая валюта вставляется, существующая обновляется.
+
+`dds.fact_request` загружается как SCD2 по полным снапшотам. Процедура берет новые снапшоты из `stage.source_table`, очищает и типизирует строки, отбраковывает некорректные записи, сравнивает валидные строки с активными версиями в `dds.fact_request`, закрывает старые версии и вставляет новые. Заявки, которые были в предыдущем снапшоте, но отсутствуют в текущем, помечаются как удаленные.
 
 ### DQ-проверки и решения
 
@@ -177,12 +198,37 @@ DAG - `dds_load_currency`
 2. Строки очищаются и приводятся к DDS-типам
 3. Некорректные строки уходят в `dds.reject_fact_request`
 4. Валидные строки сравниваются с активной версией в `dds.fact_request`
-5. Новые и измененные заявки попадают в `dds.tmp_fact_request_rows`
-6. Старые версии измененных заявок закрываются
-7. Новые версии вставляются в `dds.fact_request`
-8. Заявки, которых нет в текущем снапшоте, помечаются как удаленные
+5. Старые версии измененных заявок закрываются
+6. Новые версии вставляются в `dds.fact_request`
+7. Заявки, которых нет в текущем снапшоте, помечаются как удаленные
 
 Поле `snapshot_date` используется как дата последнего снапшота, в котором была заявка.
+
+## DM
+
+DM хранит витрины для аналитики.
+DAG - `dds_to_dm_load`
+
+В DM создаются справочники:
+
+- `dm.dim_month` - месяцы для витрин
+- `dm.dim_place_location` - связка места и локации
+- `dm.dim_responsible` - ответственные сотрудники
+- `dm.dim_status` - статусы заявок
+
+Основные таблицы фактов:
+
+- `dm.fact_first_priority` - заявки, требующие особого внимания
+- `dm.fact_metrics` - расчетные метрики по заявкам
+
+Служебные таблицы:
+
+- `dm.tmp_fact_first_priority` - новый набор данных для `dm.fact_first_priority`
+- `dm.tmp_fact_metrics` - новый набор данных для `dm.fact_metrics`
+
+Справочники DM перегружаются через `TRUNCATE + INSERT`.
+
+Факты DM пересчитываются полностью: сначала новый набор данных пишется в `tmp`-таблицу, затем целевая таблица подменяется через `public.replace_table_with_tmp`.
 
 ## Расписание DAG-ов
 
@@ -192,6 +238,7 @@ DAG - `dds_load_currency`
 07:00 - source_to_stage_incremental_load
 08:00 - dds_load_currency
 08:30 - stage_to_dds_load
+09:00 - dds_to_dm_load
 ```
 
 `source_to_stage_full_reload` запускается вручную, когда нужно полностью перегрузить Stage.
@@ -205,19 +252,18 @@ DAG - `dds_load_currency`
 Главный файл:
 
 ```text
-airflow/dags/create_all_db_objects.sql
+airflow/create_dwh_objects.sql
 ```
 
 Он запускает:
 
 ```text
-ddl/stage/create_stage_objects.sql
-ddl/dds/create_dds_objects.sql
-dml/dds/create_dds_objects.sql
+dags/ddl/create_ddl_objects.sql
+dags/dml/create_dml_objects.sql
 ```
 
-DDL-скрипты создают схемы и таблицы.
-DML-скрипты в `dml/dds` создают функции и процедуры DDS.
+DDL-скрипты создают схемы и таблицы Stage, DDS и DM.
+DML-скрипты создают функции и процедуры для загрузок.
 
 ## Запуск
 

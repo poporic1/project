@@ -4,7 +4,7 @@ from airflow import DAG
 from airflow.operators.empty import EmptyOperator
 from airflow.operators.python import PythonOperator
 
-from common.stage_loader import load_incremental_new_data_to_stage_table
+from etl.stage_loader import load_incremental_new_data_to_stage_table
 
 
 # DAG инкрементальной загрузки Source в Stage
@@ -18,7 +18,7 @@ with DAG(
 
     start = EmptyOperator(task_id="start")
 
-    # загрузка только новых данных по insert_dt
+    # инкрементальная загрузка новых строк из Source в stage.source_table
     load_incremental_new_data_to_stage_table_task = PythonOperator(
         task_id="load_incremental_new_data_to_stage_table",
         python_callable=load_incremental_new_data_to_stage_table,
@@ -26,5 +26,8 @@ with DAG(
 
     finish = EmptyOperator(task_id="finish")
 
-    # порядок выполнения задач
-    start >> load_incremental_new_data_to_stage_table_task >> finish
+    (
+        start
+        >> load_incremental_new_data_to_stage_table_task
+        >> finish
+    )

@@ -31,7 +31,7 @@ services:
     ports:
       - "5440:5432"
     volumes:
-      - ./airflow/dags:/docker-entrypoint-initdb.d:ro
+      - ./airflow:/docker-entrypoint-initdb.d:ro
       - dwh_pgdata:/var/lib/postgresql/data
 
   airflow-postgres:

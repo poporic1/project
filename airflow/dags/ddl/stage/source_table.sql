@@ -1,5 +1,3 @@
-create schema if not exists stage;
-
 create table if not exists stage.source_table (
       id                    text null
     , "desc"                text null

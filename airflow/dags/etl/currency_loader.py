@@ -22,7 +22,6 @@ HTTP_RETRIES = 3
 HTTP_BACKOFF_FACTOR = 0.5
 HTTP_STATUS_FORCELIST = (500, 502, 503, 504)
 
-# по спецификации в текстовых полях разрешены только буквы, цифры, пробел, точка, запятая и дефис
 ALLOWED_TEXT_PATTERN = re.compile(r"^[0-9A-Za-zА-Яа-яЁё .,\-]+$")
 
 UPSERT_CURRENCY_SQL = """
@@ -89,7 +88,11 @@ def fetch_currency_json() -> dict:
         response = session.get(CBR_URL, timeout=HTTP_TIMEOUT)
         response.raise_for_status()
     except requests.HTTPError as error:
-        status_code = error.response.status_code if error.response is not None else None
+
+        status_code = None
+        if error.response is not None:
+            status_code = error.response.status_code
+
         logger.exception("HTTP-ошибка при запросе API ЦБ РФ")
 
         if status_code is not None and 400 <= status_code < 500:
@@ -105,10 +108,14 @@ def fetch_currency_json() -> dict:
     try:
         data = response.json()
     except ValueError as error:
-        raise AirflowFailException("Ответ API ЦБ РФ не является корректным JSON") from error
+        raise AirflowFailException(
+            "Ответ API ЦБ РФ не является корректным JSON"
+        ) from error
 
     if not data.get("Valute"):
-        raise AirflowFailException("В ответе API ЦБ РФ отсутствует блок Valute")
+        raise AirflowFailException(
+            "В ответе API ЦБ РФ отсутствует блок Valute"
+        )
 
     if not data.get("Date"):
         raise AirflowFailException("В ответе API ЦБ РФ отсутствует поле Date")
@@ -116,7 +123,7 @@ def fetch_currency_json() -> dict:
     return data
 
 
-def build_currency_records(data: dict) -> list[tuple[str, str, Decimal, int, str]]:
+def build_currency_records(data: dict) -> list[tuple]:
     """
     Преобразует JSON API ЦБ РФ в записи для dds.dim_currency.
 
@@ -148,7 +155,7 @@ def build_currency_records(data: dict) -> list[tuple[str, str, Decimal, int, str
             if not validate_text_value(curr_name):
                 skipped += 1
                 logger.warning(
-                    "Пропущена валюта %s: название содержит недопустимые символы",
+                    "Пропущена валюта %s: содержит недопустимые символы",
                     char_code,
                 )
                 continue
@@ -171,12 +178,12 @@ def build_currency_records(data: dict) -> list[tuple[str, str, Decimal, int, str
     return records
 
 
-def upsert_currency_records(records: list[tuple[str, str, Decimal, int, str]]) -> None:
+def upsert_currency_records(records: list[tuple]) -> None:
     """
     Обновляет dds.dim_currency подготовленными курсами валют.
 
     :param records: Записи для вставки или обновления.
-    :type records: list[tuple[str, str, Decimal, int, str]]
+    :type records: list[tuple]
     :return: None
     :rtype: None
     :raises Exception: Если обновление dds.dim_currency завершилось ошибкой.
@@ -188,7 +195,9 @@ def upsert_currency_records(records: list[tuple[str, str, Decimal, int, str]]) -
             cursor.executemany(UPSERT_CURRENCY_SQL, records)
 
         conn.commit()
-        logger.info("Справочник dds.dim_currency обновлен. Записей: %s", len(records))
+        logger.info(
+            "Справочник dds.dim_currency обновлен. Записей: %s", len(records)
+        )
     except Exception:
         conn.rollback()
         logger.exception("Ошибка при обновлении dds.dim_currency")

@@ -4,7 +4,7 @@ from airflow import DAG
 from airflow.operators.empty import EmptyOperator
 from airflow.operators.python import PythonOperator
 
-from common.currency_loader import refresh_dim_currency
+from etl.currency_loader import refresh_dim_currency
 
 
 # DAG ежедневной загрузки курсов валют из API ЦБ РФ в DDS

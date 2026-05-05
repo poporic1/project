@@ -1,20 +1,17 @@
-from datetime import datetime
+import pendulum
 
 from airflow import DAG
 from airflow.operators.empty import EmptyOperator
 from airflow.operators.python import PythonOperator
 
-from common.stage_loader import (
-    create_tmp_table,
-    load_all_source_data_to_tmp_table,
-    swap_tmp_table_with_stage_table,
-)
+from etl.dwh import execute_dwh_sql
+from etl.stage_loader import load_all_source_data_to_tmp_table
 
 
-# DAG полной загрузки Source в Stage через временную таблицу
+# DAG полной перегрузки данных между Source и Stage через tmp-таблицу
 with DAG(
     dag_id="source_to_stage_full_reload",
-    start_date=datetime(2025, 1, 1),
+    start_date=pendulum.datetime(2026, 2, 1, tz="Europe/Moscow"),
     schedule=None,
     catchup=False,
     max_active_runs=1,
@@ -22,31 +19,32 @@ with DAG(
 
     start = EmptyOperator(task_id="start")
 
-    # создание временной таблицы stage.tmp_source_table
-    create_tmp_table_task = PythonOperator(
-        task_id="create_tmp_table",
-        python_callable=create_tmp_table,
-    )
-
-    # загрузка всех данных из Source в tmp таблицу
+    # загрузка полного набора данных из Source во временную таблицу
     load_all_source_data_to_tmp_table_task = PythonOperator(
         task_id="load_all_source_data_to_tmp_table",
         python_callable=load_all_source_data_to_tmp_table,
     )
 
-    # подмена tmp таблицы на основную stage.source_table
-    swap_tmp_table_with_stage_table_task = PythonOperator(
-        task_id="swap_tmp_table_with_stage_table",
-        python_callable=swap_tmp_table_with_stage_table,
+    # свап между временной таблицей с новыми данными и нашей целевой таблицей
+    replace_table_with_tmp_task = PythonOperator(
+        task_id="replace_table_with_tmp",
+        python_callable=execute_dwh_sql,
+        op_args=[
+            """
+            call public.replace_table_with_tmp(
+              'stage',
+              'source_table',
+              'tmp_source_table'
+            );
+            """
+        ],
     )
 
     finish = EmptyOperator(task_id="finish")
 
-    # порядок выполнения задач
     (
         start
-        >> create_tmp_table_task
         >> load_all_source_data_to_tmp_table_task
-        >> swap_tmp_table_with_stage_table_task
+        >> replace_table_with_tmp_task
         >> finish
     )

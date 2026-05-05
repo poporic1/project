@@ -171,8 +171,6 @@ BEGIN
   )
   LOOP
 
-    TRUNCATE TABLE dds.tmp_fact_request_rows;
-
     DELETE FROM dds.reject_fact_request
     WHERE dds.to_date_safe(insert_dt) = v_snapshot_dt;
 
@@ -418,7 +416,7 @@ BEGIN
       ON v.src_ctid = c.src_ctid
     WHERE v.src_ctid IS NULL;
 
-    -- сбор новых и измененных заявок во временную таблицу
+    -- подготовка новых и измененных версий заявок в целевом факте
     WITH
       curr AS (
         SELECT
@@ -606,19 +604,27 @@ BEGIN
         WHERE f.effective_to = DATE '9999-12-31'
           AND f.is_deleted = FALSE
       ),
+      known_requests AS (
+        SELECT DISTINCT request_id
+        FROM dds.fact_request
+      ),
       rows_to_insert AS (
         SELECT
           c.*,
           a.fact_request_id AS active_fact_request_id,
           FALSE AS is_deleted,
           CASE
-            WHEN a.request_id IS NULL THEN c.create_dt
+            WHEN a.request_id IS NULL
+             AND kr.request_id IS NULL
+            THEN c.create_dt
             ELSE v_snapshot_dt
           END AS effective_from,
           DATE '9999-12-31' AS effective_to
         FROM curr_valid c
         LEFT JOIN active_fact a
           ON a.request_id = c.request_id_int
+        LEFT JOIN known_requests kr
+          ON kr.request_id = c.request_id_int
         WHERE a.request_id IS NULL
            OR (
             c.author_id_int IS DISTINCT FROM a.author_id
@@ -636,64 +642,20 @@ BEGIN
             OR c.close_dt IS DISTINCT FROM a.close_date
             OR c.repair_duration IS DISTINCT FROM a.repair_duration
           )
+      ),
+      close_old_versions AS (
+        UPDATE dds.fact_request f
+        SET effective_to = v_snapshot_dt,
+            snapshot_date = v_snapshot_dt
+        WHERE f.effective_to = DATE '9999-12-31'
+          AND f.is_deleted = FALSE
+          AND EXISTS (
+            SELECT 1
+            FROM rows_to_insert r
+            WHERE r.active_fact_request_id = f.fact_request_id
+          )
+        RETURNING f.fact_request_id
       )
-    INSERT INTO dds.tmp_fact_request_rows (
-      active_fact_request_id,
-      request_id,
-      author_id,
-      responsible_id,
-      status_id,
-      place_id,
-      critical_id,
-      currency_id,
-      create_date,
-      "desc",
-      photo,
-      escalated,
-      estimated_value,
-      plan_date,
-      close_date,
-      repair_duration,
-      is_deleted,
-      effective_from,
-      effective_to,
-      snapshot_date
-    )
-    SELECT
-      r.active_fact_request_id,
-      r.request_id_int,
-      r.author_id_int,
-      r.responsible_id_int,
-      r.status_id,
-      r.place_id,
-      r.critical_id,
-      r.currency_id,
-      r.create_ts,
-      r.desc_clean,
-      r.photo_bool,
-      r.escalated_bool,
-      r.estimated_value_num,
-      r.plan_dt,
-      r.close_dt,
-      r.repair_duration,
-      r.is_deleted,
-      r.effective_from,
-      r.effective_to,
-      v_snapshot_dt
-    FROM rows_to_insert r;
-
-    -- закрытие старых записей для измененных заявок
-    UPDATE dds.fact_request f
-    SET effective_to = v_snapshot_dt
-    WHERE f.effective_to = DATE '9999-12-31'
-      AND f.is_deleted = FALSE
-      AND EXISTS (
-        SELECT 1
-        FROM dds.tmp_fact_request_rows r
-        WHERE r.active_fact_request_id = f.fact_request_id
-      );
-
-    -- вставка новых записей из временной таблицы
     INSERT INTO dds.fact_request (
       request_id,
       author_id,
@@ -716,26 +678,26 @@ BEGIN
       snapshot_date
     )
     SELECT
-      r.request_id,
-      r.author_id,
-      r.responsible_id,
+      r.request_id_int,
+      r.author_id_int,
+      r.responsible_id_int,
       r.status_id,
       r.place_id,
       r.critical_id,
       r.currency_id,
-      r.create_date,
-      r."desc",
-      r.photo,
-      r.escalated,
-      r.estimated_value,
-      r.plan_date,
-      r.close_date,
+      r.create_ts,
+      r.desc_clean,
+      r.photo_bool,
+      r.escalated_bool,
+      r.estimated_value_num,
+      r.plan_dt,
+      r.close_dt,
       r.repair_duration,
       r.is_deleted,
       r.effective_from,
       r.effective_to,
-      r.snapshot_date
-    FROM dds.tmp_fact_request_rows r;
+      v_snapshot_dt
+    FROM rows_to_insert r;
 
     WITH
       curr_ids AS (
@@ -759,4 +721,4 @@ END;
 $$;
 
 COMMENT ON PROCEDURE dds.load_fact_request()
-IS 'Загрузка таблицы фактов dds.fact_request';
+IS 'SCD2 full-загрузка dds.fact_request: закрытие старых версий и вставка новых без tmp-таблиц';
